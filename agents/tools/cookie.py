@@ -1,5 +1,6 @@
 import json
 import logging
+import numpy as np
 from typing import List, Tuple, Optional
 
 import requests
@@ -230,6 +231,9 @@ class CookieToolkit(Toolkit):
         sf_scores = [agent.get("sf_ratio_score", 0) for agent in agents]
         hc_scores = [agent.get("hc_ratio_score", 0) for agent in agents]
 
+        # Build a list for market cap values transformed by log (to compress range)
+        market_caps_log = [np.log(agent.get("marketCap", 1)) for agent in agents]
+
         # Use your existing robust_normalize for delta components.
         for agent in agents:
             norm_mindshare = robust_normalize(agent.get("mindshareDeltaPercent", 0), mindshare_deltas)
@@ -246,5 +250,10 @@ class CookieToolkit(Toolkit):
             agent["norm_sf_ratio_score"] = norm_sf
             agent["norm_hc_ratio_score"] = norm_hc
 
-            # Example: Use equal weights for now.
-            agent["finalScore"] = norm_mindshare + norm_volume*0.2 + norm_ms + norm_sf*0.5 + norm_hc*0.2
+            # Normalize market cap: using the logarithm ensures a more balanced scale.
+            agent_market_cap_log = np.log(agent.get("marketCap", 1))
+            norm_market_cap = robust_normalize(agent_market_cap_log, market_caps_log)*0.2
+
+            # Compute the combined technical indicator score.
+            tech_score = (norm_mindshare + norm_volume * 0.3 + norm_ms + norm_sf * 0.5 + norm_hc * 0.2 + norm_market_cap)/3
+            agent["finalScore"] = tech_score 
