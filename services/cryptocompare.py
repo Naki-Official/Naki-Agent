@@ -26,7 +26,7 @@ _URL_HIST_PRICE_DAY = "https://min-api.cryptocompare.com/data/v2/histoday?fsym={
 _URL_HIST_PRICE_HOUR = "https://min-api.cryptocompare.com/data/v2/histohour?fsym={}&tsym={}&limit={}&e={}&toTs={}&aggregate={}"
 _URL_HIST_PRICE_MINUTE = "https://min-api.cryptocompare.com/data/v2/histominute?fsym={}&tsym={}&limit={}&e={}&toTs={}&aggregate={}"
 _URL_AVG = "https://min-api.cryptocompare.com/data/generateAvg?fsym={}&tsym={}&e={}"
-_URL_EXCHANGES = "https://www.cryptocompare.com/api/data/exchanges?"
+_URL_EXCHANGES = "https://min-api.cryptocompare.com/data/top/exchanges?fsym={}&tsym={}"
 _URL_PAIRS = "https://min-api.cryptocompare.com/data/pair/mapping/exchange?e={}"
 
 _MAX_LIMIT_HISTO_API = 2000
@@ -185,7 +185,6 @@ def get_historical_price_day(
     coin: str,
     currency: str = CURRENCY,
     limit: int = LIMIT,
-    exchange: str = "CCCAGG",
     toTs: Timestamp = time.time(),
     fields: Optional[List[str]] = None
 ) -> Optional[List[Dict]]:
@@ -195,10 +194,10 @@ def get_historical_price_day(
     :param coin: symbolic name of the coin (e.g. BTC)
     :param currency: short hand description of the currency (e.g. EUR)
     :param limit: number of data points (max. 2000)
-    :param exchange: exchange to use (default: 'CCCAGG')
     :param toTs: return data before this timestamp. (Unix epoch time or datetime object)
     :returns: dict of coin and currency price pairs
     """
+    exchange = get_exchange(coin, currency)
     response = _query_cryptocompare(
         _URL_HIST_PRICE_DAY.format(
             coin, _format_parameter(currency), limit, exchange, _format_timestamp(toTs)
@@ -282,7 +281,6 @@ def get_historical_price_hour(
     coin: str,
     currency: str = CURRENCY,
     limit: int = LIMIT,
-    exchange: str = "CCCAGG",
     toTs: Timestamp = time.time(),
     aggregate: int = 1,
     fields: Optional[List[str]] = None
@@ -294,11 +292,16 @@ def get_historical_price_hour(
     :param coin: symbolic name of the coin (e.g. BTC)
     :param currency: short hand description of the currency (e.g. EUR)
     :param limit: number of data points (max. 2000)
-    :param exchange: exchange to use (default: 'CCCAGG')
     :param toTs: return data before this timestamp. (Unix epoch time or datetime object)
     :param aggregate: aggregation factor (default: 1)
     :returns: dict of coin and currency price pairs
     """
+    # retry with another exchange
+    exchange = get_exchange(coin, currency)
+    print("-========CryptoCompare API Wrapper========-")
+    print(_URL_HIST_PRICE_HOUR.format(
+            coin, _format_parameter(currency), limit, exchange, _format_timestamp(toTs), aggregate
+        ))
     response = _query_cryptocompare(
         _URL_HIST_PRICE_HOUR.format(
             coin, _format_parameter(currency), limit, exchange, _format_timestamp(toTs), aggregate
@@ -306,7 +309,11 @@ def get_historical_price_hour(
         fields=fields
     )
     if response:
-        return response["Data"]["Data"]
+        print(response)
+        if "Data" in response:
+            return response["Data"]["Data"]
+        else:
+            return response["Data"]
     return None
 
 
@@ -360,7 +367,6 @@ def get_historical_price_minute(
     coin: str,
     currency: str = CURRENCY,
     limit: int = LIMIT,
-    exchange: str = "CCCAGG",
     toTs: Timestamp = time.time(),
     aggregate: int = 30,
     fields: Optional[List[str]] = None
@@ -371,10 +377,10 @@ def get_historical_price_minute(
     :param coin: symbolic name of the coin (e.g. BTC)
     :param currency: short hand description of the currency (e.g. EUR)
     :param limit: number of data points (max. 2000)
-    :param exchange: exchange to use (default: 'CCCAGG')
     :param toTs: return data before this timestamp. (Unix epoch time or datetime object)
     :returns: dict of coin and currency price pairs
     """
+    exchange = get_exchange(coin, currency)
     response = _query_cryptocompare(
         _URL_HIST_PRICE_MINUTE.format(
             coin, _format_parameter(currency), limit, exchange, _format_timestamp(toTs), aggregate
@@ -406,15 +412,20 @@ def get_avg(
     return None
 
 
-def get_exchanges(fields: Optional[List[str]] = None) -> Optional[Dict]:
+def get_exchange(coin: str, currency: str = CURRENCY,fields: Optional[List[str]] = None) -> Optional[Dict]:
     """
     Get the list of available exchanges.
 
     :returns: list of available exchanges
     """
-    response = _query_cryptocompare(_URL_EXCHANGES,fields=fields)
+    response = _query_cryptocompare(_URL_EXCHANGES.format(coin, currency),fields=fields)
     if response:
-        return response["Data"]
+        exchanges = response["Data"]
+        if exchanges:
+            exchange = exchanges[0].get("exchange", "CCCAGG")
+        else:
+            exchange = "CCCAGG"
+        return exchange
     return None
 
 

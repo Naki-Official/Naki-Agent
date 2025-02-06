@@ -4,12 +4,11 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 import requests
-from agno.tools import Toolkit
 
-from agents.utils.util import safe_ratio, compute_ratio_score, log_robust_normalize, robust_normalize
+from utils.util import safe_ratio, compute_ratio_score, log_robust_normalize, robust_normalize
 
 
-class CookieToolkit(Toolkit):
+class CookieToolkit():
     """
     The CookieToolkit class provides methods to interact with the Cookie APIs.
     It offers endpoints to retrieve agent details by Twitter username or contract address,
@@ -27,18 +26,10 @@ class CookieToolkit(Toolkit):
         Args:
             api_key (str): The API key for accessing the Cookie endpoints.
         """
-        super().__init__(name="cookie")
         self.api_key = api_key
         # Define the base URL for the Cookie API.
         # Update this value if the actual API domain is different.
         self.base_url = "https://api.cookie.fun"
-
-        # Register toolkit functions
-        self.register(self.get_agent_by_twitter_username)
-        self.register(self.get_agent_by_contract_address)
-        self.register(self.get_agents_paged)
-        self.register(self.search_tweets)
-        self.register(self.get_all_agents)
 
     def _request(self, url: str) -> str:
         """
@@ -133,7 +124,7 @@ class CookieToolkit(Toolkit):
         url = self.base_url + endpoint
         return self._request(url)
 
-    def get_all_agents(self, interval: str) -> list:
+    def get_all_agents(self, interval: str, chain_id: int = -2) -> List[dict]:
         """
         Retrieve all agents by iterating through all pages using a page size of 25.
         This minimizes the number of pages to iterate through. It collects the data from each page
@@ -142,6 +133,7 @@ class CookieToolkit(Toolkit):
 
         Args:
             interval (str): The interval for Twitter stats and deltas (e.g., _3Days, _7Days).
+            chain_id (int): The chain ID of the agents to retrieve (default is -2 for solana).
 
         Returns:
             list: A list of all agents retrieved from the API.
@@ -161,7 +153,11 @@ class CookieToolkit(Toolkit):
 
             ok_data = response_json.get("ok", {})
             page_agents = ok_data.get("data", [])
-            all_agents.extend(page_agents)
+            # filter agents with chain_id
+            for agent in page_agents:
+                if agent.get("contracts"):
+                    if agent.get("contracts")[0].get("chain") == chain_id:
+                        all_agents.append(agent)
 
             total_pages = ok_data.get("totalPages", 1)
 
@@ -207,15 +203,22 @@ class CookieToolkit(Toolkit):
             delta_vol = agent.get("volume24HoursDeltaPercent", 0)
             score_delta = delta_ms + delta_vol
             market_cap = agent.get("marketCap", 0)
+            mindshare = agent.get("mindshare", 0)
     
-            ms_score = compute_ratio_score(avg_mindshare_ratio, agent.get("mindshare", 0), market_cap)
+            ms_score = compute_ratio_score(avg_mindshare_ratio, mindshare, market_cap)
             sf_score = compute_ratio_score(avg_smart_followers_ratio, agent.get("smartFollowersCount", 0), market_cap)
             hc_score = compute_ratio_score(avg_holders_ratio, agent.get("holdersCount", 0), market_cap)
     
             agent["ms_ratio_score"] = ms_score if ms_score is not None else 0
             agent["sf_ratio_score"] = sf_score if sf_score is not None else 0
             agent["hc_ratio_score"] = hc_score if hc_score is not None else 0
-    
+
+            agent["avg_mindshare_ratio"] = avg_mindshare_ratio
+            if mindshare>0:
+                agent["mindshare_ratio"] = market_cap / mindshare
+            else:
+                agent["mindshare_ratio"] = 0
+                
             available_scores = [score for score in (ms_score, sf_score, hc_score) if score is not None]
             pe_adjustment_score = sum(available_scores) / len(available_scores) if available_scores else 0
     
@@ -230,30 +233,30 @@ class CookieToolkit(Toolkit):
         ms_scores = [agent.get("ms_ratio_score", 0) for agent in agents]
         sf_scores = [agent.get("sf_ratio_score", 0) for agent in agents]
         hc_scores = [agent.get("hc_ratio_score", 0) for agent in agents]
-
-        # Build a list for market cap values transformed by log (to compress range)
-        market_caps_log = [np.log(agent.get("marketCap", 1)) for agent in agents]
+        mindshares = [agent.get("mindshare", 0) for agent in agents]
 
         # Use your existing robust_normalize for delta components.
         for agent in agents:
             norm_mindshare = robust_normalize(agent.get("mindshareDeltaPercent", 0), mindshare_deltas)
             norm_volume = robust_normalize(agent.get("volume24HoursDeltaPercent", 0), volume_deltas)
             # Apply the log robust normalization for ratio scores.
-            norm_ms = log_robust_normalize(agent.get("ms_ratio_score", 0), ms_scores)
-            norm_sf = log_robust_normalize(agent.get("sf_ratio_score", 0), sf_scores)
-            norm_hc = log_robust_normalize(agent.get("hc_ratio_score", 0), hc_scores)
-            
+            norm_ms_ratio = log_robust_normalize(agent.get("ms_ratio_score", 0), ms_scores)
+            norm_sf_ratio = log_robust_normalize(agent.get("sf_ratio_score", 0), sf_scores)
+            norm_hc_ratio = log_robust_normalize(agent.get("hc_ratio_score", 0), hc_scores)
+            norm_ms = log_robust_normalize(agent.get("mindshare", 0), mindshares)
+
             # Store normalized components.
             agent["norm_mindshareDeltaPercent"] = norm_mindshare
             agent["norm_volume24HoursDeltaPercent"] = norm_volume
-            agent["norm_ms_ratio_score"] = norm_ms
-            agent["norm_sf_ratio_score"] = norm_sf
-            agent["norm_hc_ratio_score"] = norm_hc
+            agent["norm_ms_ratio_score"] = norm_ms_ratio
+            agent["norm_sf_ratio_score"] = norm_sf_ratio
+            agent["norm_hc_ratio_score"] = norm_hc_ratio
+            agent["norm_ms"] = norm_ms
 
-            # Normalize market cap: using the logarithm ensures a more balanced scale.
-            agent_market_cap_log = np.log(agent.get("marketCap", 1))
-            norm_market_cap = robust_normalize(agent_market_cap_log, market_caps_log)*0.2
+            # # Normalize market cap: using the logarithm ensures a more balanced scale.
+            # agent_market_cap_log = np.log(agent.get("marketCap", 1))
+            # norm_market_cap = robust_normalize(agent_market_cap_log, market_caps_log)
 
             # Compute the combined technical indicator score.
-            tech_score = (norm_mindshare + norm_volume * 0.3 + norm_ms + norm_sf * 0.5 + norm_hc * 0.2 + norm_market_cap)/3
+            tech_score = norm_ms*0.2 + norm_mindshare + norm_volume * 0.3 + norm_ms_ratio + norm_sf_ratio * 0.5 + norm_hc_ratio * 0.2 
             agent["finalScore"] = tech_score 

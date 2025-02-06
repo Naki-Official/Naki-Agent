@@ -3,10 +3,9 @@ import logging
 from typing import List, Dict
 
 import requests
-from agno.tools import Toolkit
 
 
-class DexscreenerToolkit(Toolkit):
+class DexscreenerToolkit():
     """
     DexscreenerToolkit provides methods to interact with the Dexscreener API.
     It supports searching for token pairs by token symbol or by token contract address.
@@ -16,12 +15,7 @@ class DexscreenerToolkit(Toolkit):
         """
         Initialize the Dexscreener Toolkit.
         """
-        super().__init__(name="dexscreener")
         self.base_url = "https://api.dexscreener.com/latest/dex/search"
-
-        # Register functions with the toolkit
-        self.register(self.search_by_token)
-        self.register(self.search_by_address)
 
     def _request(self, url: str) -> str:
         """
@@ -100,8 +94,8 @@ class DexscreenerToolkit(Toolkit):
             for pair in pairs:
                 base_token = pair.get("baseToken", {})
                 if base_token.get("address", "").lower() == token_address.lower():
-                    return json.dumps(pair)
-            return json.dumps([])
+                    return pair
+            return {}
         
         except Exception as e:
             logging.error(f"Error in search_by_address: {e}")
