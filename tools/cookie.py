@@ -253,10 +253,6 @@ class CookieToolkit():
             agent["norm_hc_ratio_score"] = norm_hc_ratio
             agent["norm_ms"] = norm_ms
 
-            # # Normalize market cap: using the logarithm ensures a more balanced scale.
-            # agent_market_cap_log = np.log(agent.get("marketCap", 1))
-            # norm_market_cap = robust_normalize(agent_market_cap_log, market_caps_log)
-
             # Compute the combined technical indicator score.
-            tech_score = norm_ms*0.2 + norm_mindshare + norm_volume * 0.3 + norm_ms_ratio + norm_sf_ratio * 0.5 + norm_hc_ratio * 0.2 
+            tech_score = norm_ms + norm_mindshare + norm_volume * 0.3 + norm_ms_ratio + norm_sf_ratio * 0.5 + norm_hc_ratio * 0.2 
             agent["finalScore"] = tech_score 

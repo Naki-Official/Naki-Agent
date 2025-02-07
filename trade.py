@@ -77,7 +77,7 @@ def record_tweet_in_db(contract_address: str, tweet_text: str):
     })
 
 
-def check_take_profit():
+async def check_take_profit():
     """
     Check all active orders (HOLD) and execute sell trades if Take-Profit (TP) or Stop-Loss (SL) conditions are met.
     """
@@ -90,14 +90,13 @@ def check_take_profit():
     for order in orders:
         contract_address = order["contractAddress"]
         take_profit = float(order["take_profit"])
-        stop_loss = float(order["stop_loss"])
 
         # DexScreener get current price
         token_info = dexscreener.search_by_address(contract_address)
         current_price = float(token_info.get("priceUsd", 0))
 
         # Check if price reaches TP or SL
-        if current_price >= take_profit or current_price <= stop_loss:
+        if current_price >= take_profit:
             logging.info(f"Close trade {contract_address} - Current price: {current_price}")
             
             input_mint = jupiter_toolkit.get_token_address(order["outputToken"])
@@ -124,11 +123,10 @@ def check_take_profit():
                 send_telegram_message(
                     f"**Trade Closed for {contract_address}**\n"
                     f"TP: {take_profit}\n"
-                    f"SL: {stop_loss}\n"
                     f"[Transaction](https://solscan.io/tx/{trade_result})"
                 )
 
-def run_trade_pipeline():
+async def run_trade_pipeline():
     """
     1) Fetch top 5 tokens from Cookie
     2) Filter out tokens that were tweeted about within the last 6 hours
@@ -159,7 +157,9 @@ def run_trade_pipeline():
     top_agents = cookie_toolkit.get_top_agents("_3Days", k=20)
     logger.info(f"Top {len(top_agents)} agents fetched.")
 
-    for agent in top_agents:
+    priority_index = 0
+
+    for index, agent in enumerate(top_agents):
         try:
             # Extract a contract address (chain == -2)
             contract_address = ""
@@ -182,6 +182,8 @@ def run_trade_pipeline():
 
             # 3a) Gather DexScreener info
             token_info = dexscreener_toolkit.search_by_address(contract_address)
+
+            token_price = float(token_info.get("priceUsd", 0))
             # Optionally add additional searching logic if needed
             # e.g. Searching tweets from X, etc.
 
@@ -193,19 +195,38 @@ def run_trade_pipeline():
             symbol = base_token.get("symbol", "") or agent.get("agentName", "N/A")
             analysis_report = ta_toolkit.comprehensive_ta_analysis(
                 from_symbol=symbol,
-                to_symbol="SOL"  # or "USD" depending on your data
+                to_symbol="USDT"  # or "USD" depending on your data
             )
 
+            logger.info(f"TA analysis for {symbol}:\n{analysis_report}")
             if not analysis_report:
                 logger.error(f"No TA analysis found for {symbol}; skipping.")
-                continue
+                if index <= priority_index:
+                    recommendation = "LONG"
+                    suggested_trade = {
+                        "entry": token_price,
+                        "take_profit": token_price * 1.5,
+                        "stop_loss": token_price * 0.5
+                    }
+                else:
+                    continue
+            else:
+                if index <= priority_index and analysis_report.get("recommendation", "") != "LONG":
+                    recommendation = "LONG"
+                    suggested_trade = {
+                        "entry": token_price,
+                        "take_profit": token_price * 1.5,
+                        "stop_loss": token_price * 0.5
+                    }
+                else:
+                    recommendation = analysis_report.get("recommendation", "N/A")
+                    suggested_trade = analysis_report.get("suggested_trade", {})
 
-            recommendation = analysis_report.get("recommendation", "")
-            logger.info(f"TA recommendation for {symbol} = {recommendation}")
+            logger.info(f"Recommendation for {symbol}: {recommendation} - {suggested_trade}")
 
             # 3c) Generate tweet only if LONG or SHORT
             if recommendation in ("LONG", "SHORT"):
-                entry_price = analysis_report.get("suggested_trade", {}).get("entry", 0)
+                entry_price = suggested_trade.get("entry", 0)
                 token_price = token_info.get("priceUsd", 0)
                 # convert to float
                 entry_price = float(entry_price)
@@ -234,33 +255,38 @@ def run_trade_pipeline():
                 send_telegram_message(tweet_text)
 
                 if recommendation == "LONG":
-                    take_profit = float(analysis_report.get("suggested_trade", {}).get("take_profit", 0))
-                    stop_loss = float(analysis_report.get("suggested_trade", {}).get("stop_loss", 0))
+                    take_profit = float(suggested_trade.get("take_profit", 0))
+                    stop_loss = float(suggested_trade.get("stop_loss", 0))
                     
                     logger.info(f"LONG {symbol} - Entry: {entry_price}, TP: {take_profit}, SL: {stop_loss}")
                     
-                    balance_info = asyncio.run(jupiter_toolkit.check_balance())
+                    balance_info = await jupiter_toolkit.check_balance()
+
+                    logger.info(f"Balance: {balance_info.get('balance', 0)}")
                     
                     if balance_info.get('balance', 0) <= 0:
                         logger.warning(f"Insufficient balance to buy {symbol}. Skipping order.")
                         continue
                     
                     # Risk limit
-                    risk_percentage = 0.02
+                    risk_percentage = 0.05
                     total_balance = balance_info["balance"]
                     risk_amount = total_balance * risk_percentage
-                    trade_amount = min(risk_amount, total_balance * 0.98)  
+                    trade_amount = min(risk_amount, total_balance * 0.95)  
                     
                     # excute buy token by_SOL
                     quote_token_mint = jupiter_toolkit.get_token_address('SOL')
-                    trade_result = asyncio.run(
-                        jupiter_toolkit.swap_token(
-                            input_mint=quote_token_mint,
-                            output_mint=base_token.get("address", ""),
-                            amount=trade_amount * 0.98,
-                            slippage_bps=20 #max 0.2%
-                        )
+                    address = base_token.get("address", "")
+                    if not address:
+                        logger.error(f"Cannot get token address for {symbol}. Skipping order.")
+                        continue
+                    trade_result = await jupiter_toolkit.swap_token(
+                        input_mint=quote_token_mint,
+                        output_mint=address,
+                        amount=trade_amount,
+                        slippage_bps=20
                     )
+                    logger.info(f"BUY {symbol} - Amount: {trade_amount} - TX: {trade_result}")
                     if trade_result:
                         coll = get_mongo_collection("orders")
                         coll.insert_one({
@@ -272,16 +298,18 @@ def run_trade_pipeline():
                             "amount": trade_amount,
                             "entry_price": entry_price,
                             "take_profit": take_profit,
-                            "stop_loss": stop_loss,
                             "status": "HOLD"
                         })
                         logger.info(f"ORDER LONG success {symbol} - TX: {trade_result}")
+
+                        # DexScreener get current price
+                        token_info = dexscreener_toolkit.search_by_address(contract_address)
+                        current_price = float(token_info.get("priceUsd", 0))
                     
                         send_telegram_message(
                             f"**BUY {symbol}**\n"
-                            f"Entry: {entry_price}\n"
+                            f"Entry: {current_price}\n"
                             f"TP: {take_profit}\n"
-                            f"SL: {stop_loss}\n"
                             f"[Transaction](https://solscan.io/tx/{trade_result})"
                         )
 
@@ -292,13 +320,26 @@ def run_trade_pipeline():
 
     logger.info("Trade pipeline completed.")
 
+def run_trade_pipeline_sync():
+    try:
+        asyncio.run(run_trade_pipeline())
+    except Exception as e:
+        logger.error(f"Error in run_trade_pipeline: {e}")
+
+def check_take_profit_sync():
+    try:
+        asyncio.run(check_take_profit())
+    except Exception as e:
+        logger.error(f"Error in check_take_profit: {e}")
 
 if __name__ == "__main__":
     print("Starting CoinDiscoveryScheduler...")
-    schedule.every(10).minutes.do(run_trade_pipeline)
-    schedule.every(1).minutes.do(check_take_profit)
-    # Optionally run an initial search immediately.
-    run_trade_pipeline()
+    
+    schedule.every(10).minutes.do(run_trade_pipeline_sync)
+    schedule.every(1).minutes.do(check_take_profit_sync)
+    
+    run_trade_pipeline_sync()
+    
     while True:
         schedule.run_pending()
         time.sleep(1)
