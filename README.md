@@ -45,6 +45,10 @@ Below is a high-level overview illustrating how the pipeline fetches, analyzes, 
 7. **Trade Action**  
    - If the pipeline deems a token’s TA signals a clear LONG or SHORT opportunity, a final tweet is generated.  
    - The tweet references mindshare stats, TA findings, and any newly discovered information from Token Info Search.  
+   - **Automated Trading (via Jupiter Python SDK)**:  
+     - On a **LONG** signal, the pipeline allocates a portion of SOL (e.g., 5% of the bot’s balance) and executes a swap to the target token using `jupiter_toolkit.swap_token(...)`.  
+     - The new position is saved in MongoDB with `take_profit` and `stop_loss` levels.  
+     - A scheduled job (`check_take_profit`) periodically compares the token’s current price to these thresholds and automatically **sells** if the price triggers a profit or a stop-loss condition.
 
 ---
 
