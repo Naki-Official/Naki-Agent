@@ -2,6 +2,7 @@ import json
 import httpx
 import base64
 import base58
+import requests
 from typing import Optional
 try:
     from jupiter_python_sdk.jupiter import Jupiter
@@ -57,19 +58,34 @@ class JupiterTools():
             query_trade_history_api_url=self.ENDPOINT_APIS_URL["QUERY_TRADE_HISTORY"],
         )
 
-    async def check_balance(self, token_mint: Optional[str] = None) -> dict:
-        """
-        Retrieves the balance of the wallet for a given token mint.
+    @staticmethod
+    def get_token_address(symbol: str) -> str:
+        url = "https://token.jup.ag/all"
+        response = requests.get(url)
+        tokens = response.json()
+        
+        for token in tokens:
+            if token["symbol"].upper() == symbol.upper():
+                return token["address"]
+        return None
+
+    async def check_balance(self, token_symbol: Optional[str] = None) -> dict:
+        """Check the balance of a specific token in the wallet.
+
         Args:
-            token_mint (str, optional): The mint address of the token to retrieve the balance for.
+            token_symbol (str, optional): The symbol of the token to check.
+                Defaults to None, which means to check the SOL balance.
+
         Returns:
-            dict: A dictionary containing the token mint address and its balance.
+            dict: A dictionary containing the token symbol and its balance.
         """
         wallet_address = self.wallet.pubkey()
-        if token_mint is None:
+        if token_symbol is None:
             balance_response = await self.client.get_balance(wallet_address)
             balance = balance_response.value / (10**9)
             return {"token": "SOL", "balance": balance}
+        
+        token_mint = self.get_token_address(token_symbol)
         ata_address = get_associated_token_address(wallet_address, Pubkey.from_string(token_mint))
         response = await self.client.get_token_account_balance(ata_address)
         accounts = response.value
