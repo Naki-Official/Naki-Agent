@@ -269,7 +269,7 @@ def run_trade_pipeline():
                             "tradedAt": datetime.utcnow(),
                             "inputToken": 'SOL',
                             "outputToken": symbol,
-                            "amount": balance * 0.98,
+                            "amount": trade_amount,
                             "entry_price": entry_price,
                             "take_profit": take_profit,
                             "stop_loss": stop_loss,
