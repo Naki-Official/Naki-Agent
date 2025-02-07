@@ -8,26 +8,43 @@ This repository contains `trade.py`, a Python module that orchestrates an end-to
 
 ---
 
-## Overview
+## System Overview Diagram
 
-1. **Fetch Top Tokens**  
-   - The pipeline calls `cookie_toolkit.get_top_agents("_3Days", k=20)` to retrieve up to 20 “promising” crypto tokens.
+![Naki System Overview](./naki-system-overview.png)
 
-2. **MongoDB Filtering**  
-   - The system uses MongoDB to track recent tweets. If a token’s contract address has been tweeted within the last **6 hours**, it is skipped.
+Below is a high-level overview illustrating how the pipeline fetches, analyzes, and acts on token data. 
 
-3. **Data Enrichment**  
-   - For each token, `DexscreenerToolkit` fetches additional market data (e.g. price, liquidity).  
-   - `TechnicalAnalysis` runs a multi-timeframe analysis, returning a recommendation: **LONG** or **SHORT** if conditions are met.
-   - Token Info Search: The pipeline can also gather extra details (website crawling, Twitter content, external search). The function `get_token_summary` in `pipeline/token_summary.py` merges these signals into a holistic summary.
 
-4. **Tweet Generation**  
-   - If the TA suggests LONG/SHORT, the script merges cookie data and Dex data, then generates a tweet using `generate_tweet(...)`.  
-   - The tweet references mindshare metrics, market data, and supports the recommendation with concise rationale.
 
-5. **Persistence & Notifications**  
-   - A record is inserted into MongoDB, noting the contract address, timestamp, and tweet text to avoid repeats.  
-   - The final tweet is sent to Telegram (via `send_telegram_message`).
+1. **Trading Scheduler**  
+   - Periodically triggers the main pipeline (`trade.py`) to kick off data retrieval and analysis.
+
+2. **Retrieve All Agents (Cookie.fun)**  
+   - Calls `cookie_toolkit.get_all_agents(...)` or `cookie_toolkit.get_top_agents(...)` to compile a list of tokens, filtering by market cap and ranking via mindshare metrics.
+
+3. **Get Token Data (DexScreener, CryptoCompare)**  
+   - Queries real-time price, volume, liquidity, and other fundamentals for each token.
+
+4. **Top Token Ranking**  
+   - **MarketCap Filter**: Excludes tokens below a certain threshold.  
+   - **Mindshare & Ratio Calc**: Uses mindshare, follower counts, etc. to identify undervalued projects.  
+   - **Normalize & FinalScore**: Applies robust/logarithmic normalization; generates a final ranking score.
+
+5. **Technical Analysis**  
+   - **4h Trend (SMA50 vs. SMA200)**: Gauges mid-term momentum.  
+   - **Swing Highs/Lows**: Locates potential support/resistance levels.  
+   - **1h RSI & MACD**: Determines immediate bullish/bearish signals.  
+   - Produces an overall recommendation: **LONG**, **SHORT**, or **NO_ACTION**.
+
+6. **Token Info Search**  
+   - **Website Crawl**: Extracts additional context from the project’s official site.  
+   - **Social Feed (x_content)**: Integrates real-time social chatter.  
+   - **Search Queries**: Generates questions via Vertex AI, then scans the web for relevant info.  
+   - **Summarize**: Merges all data into a concise token summary.
+
+7. **Trade Action**  
+   - If the pipeline deems a token’s TA signals a clear LONG or SHORT opportunity, a final tweet is generated.  
+   - The tweet references mindshare stats, TA findings, and any newly discovered information from Token Info Search.  
 
 ---
 
