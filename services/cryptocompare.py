@@ -298,7 +298,6 @@ def get_historical_price_hour(
     """
     # retry with another exchange
     exchange = get_exchange(coin, currency)
-    print("-========CryptoCompare API Wrapper========-")
     print(_URL_HIST_PRICE_HOUR.format(
             coin, _format_parameter(currency), limit, exchange, _format_timestamp(toTs), aggregate
         ))

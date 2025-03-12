@@ -52,7 +52,7 @@ def get_mongo_collection(coll_name: Optional[str] = None) -> "Collection":
     return db[coll_name]
 
 
-def has_recent_tweet(contract_address: str, recent_hours: int = 6) -> bool:
+def has_recent_tweet(contract_address: str, recent_hours: int = 24) -> bool:
     """
     Check in MongoDB if this contract has been tweeted about in the last 'recent_hours'.
     """
@@ -89,42 +89,50 @@ async def check_take_profit():
 
     for order in orders:
         contract_address = order["contractAddress"]
+        entry_price = float(order["entry_price"])
         take_profit = float(order["take_profit"])
 
         # DexScreener get current price
         token_info = dexscreener.search_by_address(contract_address)
         current_price = float(token_info.get("priceUsd", 0))
 
+        # Write result to txt file
+        with open("result.txt", "a") as f:
+            f.write(f"{order['outputToken']} - Entry: {entry_price}, Current: {current_price} - TP: {take_profit}\n")
+
         # Check if price reaches TP or SL
         if current_price >= take_profit:
             logging.info(f"Close trade {contract_address} - Current price: {current_price}")
             
             input_mint = jupiter_toolkit.get_token_address(order["outputToken"])
-            output_mint = jupiter_toolkit.get_token_address(order["outputToken"])
+            quote_token_mint = jupiter_toolkit.get_token_address('SOL')
             # Excute sell order
-            trade_result = asyncio.run(
-                jupiter_toolkit.swap_token(
-                    input_mint=input_mint,
-                    output_mint=output_mint,
-                    amount=order["amount"],
-                    slippage_bps=20 #max 0.2%
+            try:
+                trade_result = await jupiter_toolkit.swap_token(
+                        input_mint=input_mint,
+                        output_mint=quote_token_mint,
+                        amount=order["amount"],
+                        slippage_bps=20 #max 0.2%
                 )
-            )
 
-            if trade_result:
-                # Update trade status in MongoDB
-                coll.update_one(
-                    {"_id": order["_id"]},
-                    {"$set": {"status": "CLOSED", "sell_transaction": trade_result, "closed_at": datetime.utcnow()}}
-                )
-                logging.info(f"Trade closed for {contract_address} - TX: {trade_result}")
+                if trade_result:
+                    # Update trade status in MongoDB
+                    coll.update_one(
+                        {"_id": order["_id"]},
+                        {"$set": {"status": "CLOSED", "sell_transaction": trade_result, "closed_at": datetime.utcnow()}}
+                    )
+                    logging.info(f"Trade closed for {contract_address} - TX: {trade_result}")
 
-                # Send notification to Telegram
-                send_telegram_message(
-                    f"**Trade Closed for {contract_address}**\n"
-                    f"TP: {take_profit}\n"
-                    f"[Transaction](https://solscan.io/tx/{trade_result})"
-                )
+                    # Send notification to Telegram
+                    send_telegram_message(
+                        f"**Trade Closed for {contract_address}**\n"
+                        f"entry: {entry_price}\n"
+                        f"current: {current_price}\n"
+                        f"profit: {current_price - entry_price} ({(current_price - entry_price) / entry_price * 100:.2f}%)\n"
+                        f"[Transaction](https://solscan.io/tx/{trade_result})"
+                    )
+            except Exception as e:
+                print(f"Error in swap_token: {e}")
 
 async def run_trade_pipeline():
     """
@@ -157,7 +165,7 @@ async def run_trade_pipeline():
     top_agents = cookie_toolkit.get_top_agents("_3Days", k=20)
     logger.info(f"Top {len(top_agents)} agents fetched.")
 
-    priority_index = 0
+    priority_index = 3
 
     for index, agent in enumerate(top_agents):
         try:
@@ -237,8 +245,8 @@ async def run_trade_pipeline():
                 # Summarize token
                 end_date = datetime.now().strftime("%Y-%m-%d")
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-                x_content = cookie_toolkit.search_tweets(token_data.get("baseToken", {}).get("name", ""), start_date, end_date)
-                token_data["x_content"] = x_content
+                # x_content = cookie_toolkit.search_tweets(token_data.get("baseToken", {}).get("name", ""), start_date, end_date)
+                # token_data["x_content"] = x_content
                 token_summary = get_token_summary(token_data)
                 token_data["token_summary"] = token_summary
 
@@ -269,10 +277,10 @@ async def run_trade_pipeline():
                         continue
                     
                     # Risk limit
-                    risk_percentage = 0.05
+                    risk_percentage = 0.1
                     total_balance = balance_info["balance"]
                     risk_amount = total_balance * risk_percentage
-                    trade_amount = min(risk_amount, total_balance * 0.95)  
+                    trade_amount = min(risk_amount, total_balance * 0.90)  
                     
                     # excute buy token by_SOL
                     quote_token_mint = jupiter_toolkit.get_token_address('SOL')
@@ -288,6 +296,12 @@ async def run_trade_pipeline():
                     )
                     logger.info(f"BUY {symbol} - Amount: {trade_amount} - TX: {trade_result}")
                     if trade_result:
+                        logger.info(f"ORDER LONG success {symbol} - TX: {trade_result}")
+
+                        # DexScreener get current price
+                        token_info = dexscreener_toolkit.search_by_address(contract_address)
+                        current_price = float(token_info.get("priceUsd", 0))
+
                         coll = get_mongo_collection("orders")
                         coll.insert_one({
                             "contractAddress": contract_address,
@@ -296,15 +310,10 @@ async def run_trade_pipeline():
                             "inputToken": 'SOL',
                             "outputToken": symbol,
                             "amount": trade_amount,
-                            "entry_price": entry_price,
+                            "entry_price": current_price,
                             "take_profit": take_profit,
                             "status": "HOLD"
                         })
-                        logger.info(f"ORDER LONG success {symbol} - TX: {trade_result}")
-
-                        # DexScreener get current price
-                        token_info = dexscreener_toolkit.search_by_address(contract_address)
-                        current_price = float(token_info.get("priceUsd", 0))
                     
                         send_telegram_message(
                             f"**BUY {symbol}**\n"
@@ -335,8 +344,8 @@ def check_take_profit_sync():
 if __name__ == "__main__":
     print("Starting CoinDiscoveryScheduler...")
     
-    schedule.every(10).minutes.do(run_trade_pipeline_sync)
-    schedule.every(1).minutes.do(check_take_profit_sync)
+    schedule.every(20).minutes.do(run_trade_pipeline_sync)
+    # schedule.every(1).minutes.do(check_take_profit_sync)
     
     run_trade_pipeline_sync()
     

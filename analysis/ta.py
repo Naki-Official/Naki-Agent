@@ -14,8 +14,8 @@ class TechnicalAnalysis:
     The TechnicalAnalysis class provides methods for performing technical chart analysis on
     crypto coins using TA‑Lib indicators and data from CryptoCompareTools.
     
-    It focuses on a mid-term (4-hour) analysis to identify major trend and swing highs/lows,
-    and a short-term (1-hour) analysis for immediate signals like RSI and MACD. The results
+    It focuses on a mid-term (1-hour) analysis to identify major trend and swing highs/lows,
+    and a short-term (15-minute) analysis for immediate signals like RSI and MACD. The results
     include a recommendation, overall score, indicators, swing levels, and a suggested trade.
     """
 
@@ -32,19 +32,19 @@ class TechnicalAnalysis:
         self,
         from_symbol: str = "btc",
         to_symbol: str = "usd",
-        fourh_limit: int = 200,  # ~200 * 4h = ~800 hours (~33 days)
-        hour_limit: int = 100,   # ~100 hours (~4 days) for immediate signals
-        lookback_for_swing: int = 50  # # of 4h bars to find local maxima/minima
-    ) -> str:
+        oneh_limit: int = 200,   # 200 1h candles (~200 hours) for mid-term signals
+        min15_limit: int = 100,  # 100 15m candles (~25 hours) for immediate signals
+        lookback_for_swing: int = 50  # number of 1h bars to find local maxima/minima
+    ) -> Dict[str, Any]:
         """
         Perform a mid- to short-term technical analysis:
-          (1) 4-hour data for the major trend (SMA50 vs. SMA200) + swing highs/lows
-          (2) 1-hour data for RSI and MACD
+          (1) 1-hour data for the major trend (SMA50 vs. SMA200) + swing highs/lows
+          (2) 15-minute data for RSI and MACD
           (3) Score-based recommendation (LONG, SHORT, NO_ACTION)
           (4) Suggested trade with entry, stop_loss, and take_profit
 
         Returns:
-            str (JSON): Includes:
+            dict: Includes:
                 - recommendation: str
                 - overall_score: int
                 - reason: list of messages
@@ -54,35 +54,34 @@ class TechnicalAnalysis:
         """
         try:
             logger.info(
-                "Starting mid-term TA analysis for %s/%s using 4h & 1h data (swing highs/lows).",
+                "Starting mid-term TA analysis for %s/%s using 1h & 15m data (swing highs/lows).",
                 from_symbol, to_symbol
             )
 
-            # --- (1) FOUR-HOUR DATA ---
-            fourh_data = self._fetch_fourh_data(from_symbol, to_symbol, fourh_limit)
-            mid_trend, sma_vals, swing_highs, swing_lows = self._process_fourh_data(
-                closes=fourh_data["close"],
-                highs=fourh_data["high"],
-                lows=fourh_data["low"],
+            # --- (1) ONE-HOUR DATA FOR MID-TERM ANALYSIS ---
+            oneh_data = self._fetch_1h_data(from_symbol, to_symbol, oneh_limit)
+            mid_trend, sma_vals, swing_highs, swing_lows = self._process_1h_data_for_midterm(
+                closes=oneh_data["close"],
+                highs=oneh_data["high"],
+                lows=oneh_data["low"],
                 lookback_for_swing=lookback_for_swing
             )
 
-            # --- (2) ONE-HOUR DATA ---
-            hour_data = self._fetch_oneh_data(from_symbol, to_symbol, hour_limit)
-            rsi_1h, macd_1h_vals = self._process_oneh_data(hour_data["close"])
+            # --- (2) FIFTEEN-MINUTE DATA FOR IMMEDIATE SIGNALS ---
+            min15_data = self._fetch_15m_data(from_symbol, to_symbol, min15_limit)
+            rsi_15m, macd_15m_vals = self._process_15m_data(min15_data["close"])
 
             # --- (3) SCORING & RECOMMENDATION ---
             overall_score, reason_list, recommendation = self._build_score_and_recommendation(
                 mid_trend=mid_trend,
-                rsi_1h=rsi_1h,
-                macd_hist=macd_1h_vals["hist"]
+                rsi_15m=rsi_15m,
+                macd_hist=macd_15m_vals["hist"]
             )
 
             # --- (4) SUGGESTED TRADE ---
             suggested_trade, more_reasons = self._suggest_trade(
                 recommendation, swing_highs, swing_lows
             )
-            print('=====================SUGGESTED TRADE=====================')
             reason_list.extend(more_reasons)
 
             # --- (5) BUILD FINAL REPORT ---
@@ -91,8 +90,8 @@ class TechnicalAnalysis:
                 overall_score,
                 reason_list,
                 sma_vals,
-                rsi_1h,
-                macd_1h_vals,
+                rsi_15m,
+                macd_15m_vals,
                 swing_highs,
                 swing_lows,
                 suggested_trade
@@ -101,30 +100,13 @@ class TechnicalAnalysis:
 
         except Exception as e:
             logger.error("Error in mid-term TA analysis (swing highs/lows): %s", e)
-            return json.dumps({"error": str(e)})
+            return None
 
     # -------------------------------------------------------------------------
     #                           PRIVATE HELPER METHODS
     # -------------------------------------------------------------------------
 
-    def _fetch_fourh_data(
-        self,
-        from_symbol: str,
-        to_symbol: str,
-        limit: int
-    ) -> Dict[str, Any]:
-        """
-        Fetch 4-hour OHLCV data from CryptoCompareTools.
-        Each candle covers a 4-hour span.
-        """
-        fourh_json = self.cc_tools.historical_ohlcv_hour(
-            from_symbol, to_symbol,
-            limit=limit,
-            aggregate=4
-        )
-        return self._parse_ohlcv(fourh_json)
-
-    def _fetch_oneh_data(
+    def _fetch_1h_data(
         self,
         from_symbol: str,
         to_symbol: str,
@@ -132,17 +114,35 @@ class TechnicalAnalysis:
     ) -> Dict[str, Any]:
         """
         Fetch 1-hour OHLCV data from CryptoCompareTools.
+        Each candle covers a 1-hour span.
         """
-        ohlcv_data = self.cc_tools.historical_ohlcv_hour(
+        oneh_json = self.cc_tools.historical_ohlcv_hour(
             from_symbol, to_symbol,
             limit=limit,
             aggregate=1
         )
-        return self._parse_ohlcv(ohlcv_data)
+        return self._parse_ohlcv(oneh_json)
+
+    def _fetch_15m_data(
+        self,
+        from_symbol: str,
+        to_symbol: str,
+        limit: int
+    ) -> Dict[str, Any]:
+        """
+        Fetch 15-minute OHLCV data from CryptoCompareTools.
+        Each candle covers a 15-minute span.
+        """
+        fifteen_json = self.cc_tools.historical_ohlcv_minute(
+            from_symbol, to_symbol,
+            limit=limit,
+            aggregate=15
+        )
+        return self._parse_ohlcv(fifteen_json)
 
     def _parse_ohlcv(self, ohlcv_data: list) -> Dict[str, Any]:
         """
-        Parse CryptoCompare OHLCV. Return a dict of NumPy arrays:
+        Parse CryptoCompare OHLCV data. Return a dict of NumPy arrays:
         { 'open', 'high', 'low', 'close', 'volume' } (indexed in ascending time).
         """
         # Sort by time ascending
@@ -156,7 +156,7 @@ class TechnicalAnalysis:
             "volume": np.array([d.get("volumeto", 0) for d in ohlcv_data], dtype=float)
         }
 
-    def _process_fourh_data(
+    def _process_1h_data_for_midterm(
         self,
         closes: np.array,
         highs: np.array,
@@ -164,14 +164,14 @@ class TechnicalAnalysis:
         lookback_for_swing: int
     ) -> (str, Dict[str, float], List[float], List[float]):
         """
-        Process 4h data to:
+        Process 1h data to:
           - Compute SMA50 vs. SMA200 to determine mid-term trend
           - Identify swing highs/lows within the last 'lookback_for_swing' bars
         """
         if len(closes) < 200:
-            raise ValueError("Not enough 4-hour data to compute SMA200 for mid-term trend.")
+            raise ValueError("Not enough 1-hour data to compute SMA200 for mid-term trend.")
 
-        # SMA
+        # SMA calculations
         sma50 = talib.SMA(closes, timeperiod=50)
         sma200 = talib.SMA(closes, timeperiod=200)
         last_sma50 = sma50[-1] if sma50[-1] else 0.0
@@ -183,8 +183,8 @@ class TechnicalAnalysis:
         return (
             mid_trend,
             {
-                "sma50_4h": float(last_sma50),
-                "sma200_4h": float(last_sma200),
+                "sma50_1h": float(last_sma50),
+                "sma200_1h": float(last_sma200),
             },
             local_highs,
             local_lows
@@ -200,7 +200,7 @@ class TechnicalAnalysis:
         Return two lists:
           - local_highs (descending)
           - local_lows  (ascending)
-        within the last `window` bars (excluding final bar for 'confirmed' swing).
+        within the last `window` bars (excluding the final bar for confirmation).
         """
         local_highs = []
         local_lows = []
@@ -209,10 +209,10 @@ class TechnicalAnalysis:
         end_idx = len(highs) - 1
 
         for i in range(start_idx, end_idx):
-            # local max
+            # Check for local maximum
             if highs[i] > highs[i - 1] and highs[i] > highs[i + 1]:
                 local_highs.append(highs[i])
-            # local min
+            # Check for local minimum
             if lows[i] < lows[i - 1] and lows[i] < lows[i + 1]:
                 local_lows.append(lows[i])
 
@@ -221,23 +221,25 @@ class TechnicalAnalysis:
 
         return local_highs, local_lows
 
-    def _process_oneh_data(
+    def _process_15m_data(
         self,
         closes: np.array
     ) -> (float, Dict[str, float]):
         """
-        Process 1-hour data to compute RSI(14) and MACD(12,26,9).
+        Process 15-minute data to compute RSI(14) and MACD(12,26,9).
         Returns:
           - latest RSI value
           - dict of latest { "macd", "signal", "hist" }
         """
         if len(closes) < 26:
-            raise ValueError("Not enough 1-hour data to compute MACD(12,26).")
+            raise ValueError("Not enough 15-minute data to compute MACD(12,26).")
 
         rsi_vals = talib.RSI(closes, timeperiod=14)
         latest_rsi = float(rsi_vals[-1])
 
-        macd_vals, macd_sig, macd_hist = talib.MACD(closes, fastperiod=12, slowperiod=26, signalperiod=9)
+        macd_vals, macd_sig, macd_hist = talib.MACD(
+            closes, fastperiod=12, slowperiod=26, signalperiod=9
+        )
         return (
             latest_rsi,
             {
@@ -250,7 +252,7 @@ class TechnicalAnalysis:
     def _build_score_and_recommendation(
         self,
         mid_trend: str,
-        rsi_1h: float,
+        rsi_15m: float,
         macd_hist: float
     ) -> (int, List[str], str):
         """
@@ -260,34 +262,34 @@ class TechnicalAnalysis:
         overall_score = 0
         reason_list = []
 
-        # Mid-term trend (4h)
+        # Mid-term trend (1h)
         if mid_trend == "bullish":
             overall_score += 1
-            reason_list.append("4h trend is bullish (SMA50 > SMA200).")
+            reason_list.append("1h trend is bullish (SMA50 > SMA200).")
         else:
             overall_score -= 1
-            reason_list.append("4h trend is bearish (SMA50 <= SMA200).")
+            reason_list.append("1h trend is bearish (SMA50 <= SMA200).")
 
-        # RSI (1-hour)
-        if rsi_1h < 30:
+        # RSI (15-minute)
+        if rsi_15m < 45:
             overall_score += 1
-            reason_list.append(f"RSI(14,1h) oversold at {rsi_1h:.2f}.")
-        elif rsi_1h > 70:
+            reason_list.append(f"RSI(14,15m) oversold at {rsi_15m:.2f}.")
+        elif rsi_15m > 70:
             overall_score -= 1
-            reason_list.append(f"RSI(14,1h) overbought at {rsi_1h:.2f}.")
+            reason_list.append(f"RSI(14,15m) overbought at {rsi_15m:.2f}.")
         else:
-            reason_list.append(f"RSI(14,1h) neutral at {rsi_1h:.2f}.")
+            reason_list.append(f"RSI(14,15m) neutral at {rsi_15m:.2f}.")
 
-        # MACD histogram (1-hour)
-        if macd_hist > 0:
+        # MACD histogram (15-minute)
+        if macd_hist >= 0:
             overall_score += 1
-            reason_list.append("MACD(1h) histogram positive -> bullish momentum.")
+            reason_list.append("MACD(15m) histogram positive -> bullish momentum.")
         else:
             overall_score -= 1
-            reason_list.append("MACD(1h) histogram negative -> bearish momentum.")
+            reason_list.append("MACD(15m) histogram negative -> bearish momentum.")
 
-        # Final recommendation
-        if overall_score >= 2:
+        # Final recommendation based on overall score
+        if overall_score >= 1:
             recommendation = "LONG"
             reason_list.append("Overall score >= 2 -> LONG signal.")
         elif overall_score <= -2:
@@ -315,13 +317,13 @@ class TechnicalAnalysis:
             reason_list.append("No local swing highs/lows found. No trade suggested.")
             return trade, reason_list
 
-        # We pick top 2 resistances (local_highs[0..1]) and top 2 supports (local_lows[0..1]).
+        # Choose top 2 resistances (local_highs) and supports (local_lows)
         r1 = local_highs[0] if local_highs else None
         r2 = local_highs[1] if len(local_highs) > 1 else None
-        s1 = local_lows[0]  if local_lows else None
-        s2 = local_lows[1]  if len(local_lows) > 1 else None
+        s1 = local_lows[0] if local_lows else None
+        s2 = local_lows[1] if len(local_lows) > 1 else None
 
-        # fallback
+        # Fallback values
         if r1 is None: r1 = 999999
         if r2 is None: r2 = 999999
         if s1 is None: s1 = 0
@@ -364,8 +366,8 @@ class TechnicalAnalysis:
         overall_score: int,
         reason_list: List[str],
         sma_vals: Dict[str, float],
-        rsi_1h: float,
-        macd_1h_vals: Dict[str, float],
+        rsi_15m: float,
+        macd_15m_vals: Dict[str, float],
         local_highs: List[float],
         local_lows: List[float],
         suggested_trade: Dict[str, float]
@@ -373,17 +375,17 @@ class TechnicalAnalysis:
         """
         Combine all info into a final report dict.
         """
-        # Round out indicator values for readability
+        # Round indicator values for clarity
         indicator_values = {
-            "sma50_4h": round(sma_vals.get("sma50_4h", 0), 2),
-            "sma200_4h": round(sma_vals.get("sma200_4h", 0), 2),
-            "rsi_1h": round(rsi_1h, 2),
-            "macd_1h": round(macd_1h_vals["macd"], 2),
-            "macd_signal_1h": round(macd_1h_vals["signal"], 2),
-            "macd_hist_1h": round(macd_1h_vals["hist"], 2)
+            "sma50_1h": round(sma_vals.get("sma50_1h", 0), 2),
+            "sma200_1h": round(sma_vals.get("sma200_1h", 0), 2),
+            "rsi_15m": round(rsi_15m, 2),
+            "macd_15m": round(macd_15m_vals["macd"], 2),
+            "macd_signal_15m": round(macd_15m_vals["signal"], 2),
+            "macd_hist_15m": round(macd_15m_vals["hist"], 2)
         }
 
-        # Keep top 2 for clarity
+        # Keep top 2 swing levels for clarity
         top_highs = [round(h, 2) for h in local_highs[:2]]
         top_lows = [round(l, 2) for l in local_lows[:2]]
 
@@ -403,8 +405,8 @@ class TechnicalAnalysis:
             "swing_levels": swing_levels,
             "suggested_trade": {
                 "entry":    round(suggested_trade["entry"], 2) if suggested_trade["entry"] else None,
-                "stop_loss":round(suggested_trade["stop_loss"], 2) if suggested_trade["stop_loss"] else None,
-                "take_profit":round(suggested_trade["take_profit"], 2) if suggested_trade["take_profit"] else None
+                "stop_loss": round(suggested_trade["stop_loss"], 2) if suggested_trade["stop_loss"] else None,
+                "take_profit": round(suggested_trade["take_profit"], 2) if suggested_trade["take_profit"] else None
             }
         }
         return report
